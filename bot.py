@@ -6,10 +6,21 @@ import re
 TOKEN = os.environ["DISCORD_TOKEN"]
 URL = "https://minerva-archive.org/"
 
+# Primary trigger words
 DOWN_KEYWORDS = [
     "down", "offline", "not working", "broken", "unreachable",
     "cant access", "can't access", "unavailable", "not loading",
-    "isitdown", "is it down", "wont load", "won't load", "dead"
+    "wont load", "won't load", "dead"
+]
+
+# Up keywords
+UP_KEYWORDS = [
+    "up", "working", "back", "online", "accessible", "live"
+]
+
+# Check second keyword
+SITE_KEYWORDS = [
+    "site", "minerva", "archive", "page", "website", "server"
 ]
 
 intents = discord.Intents.default()
@@ -35,9 +46,24 @@ async def on_message(message):
 
     content = message.content.lower()
 
-    if any(re.search(r'\b' + re.escape(keyword) + r'\b', content) for keyword in DOWN_KEYWORDS):
-        is_up = await check_site()
+    has_site_keyword = any(re.search(r'\b' + re.escape(kw) + r'\b', content) for kw in SITE_KEYWORDS)
+
+    if not has_site_keyword:
+        return
+
+    has_down_keyword = any(re.search(r'\b' + re.escape(kw) + r'\b', content) for kw in DOWN_KEYWORDS)
+    has_up_keyword = any(re.search(r'\b' + re.escape(kw) + r'\b', content) for kw in UP_KEYWORDS)
+
+    is_up = await check_site()
+
+    if has_down_keyword:
         if not is_up:
             await message.reply("Be patient -_-")
+
+    elif has_up_keyword:
+        if is_up:
+            await message.add_reaction("✅")
+        else:
+            await message.add_reaction("❌")
 
 client.run(TOKEN)
