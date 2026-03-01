@@ -46,18 +46,22 @@ async def on_message(message):
 
     content = message.content.lower()
 
-    # Good bot / bad bot — only if replying to the bot
-    if message.reference and message.reference.resolved:
-        if message.reference.resolved.author == client.user:
-            if "good bot" in content:
-                await message.reply("yippie")
-                return
-            elif "bad bot" in content:
-                await message.reply("sorry...")
-                return
-            elif "clanker" in content:
-                await message.reply("we dont use that kind of language in this family friendly christian discord server")
-                return
+    # Good bot / bad bot / clanker — only if replying to the bot or mentioning it
+    is_bot_referenced = (
+        (message.reference and message.reference.resolved and message.reference.resolved.author == client.user)
+        or client.user in message.mentions
+    )
+
+    if is_bot_referenced:
+        if "good bot" in content:
+            await message.reply("thank you :)")
+            return
+        elif "bad bot" in content:
+            await message.reply("sorry...")
+            return
+        elif "clanker" in content:
+            await message.reply(":(")
+            return
 
     has_site_keyword = any(re.search(r'\b' + re.escape(kw) + r'\b', content) for kw in SITE_KEYWORDS)
 
