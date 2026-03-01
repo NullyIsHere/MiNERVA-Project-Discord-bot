@@ -77,6 +77,25 @@ async def fetch_all_leaderboard():
     _leaderboard_cache_time = time.time()
     return entries
 
+async def fetch_leaderboard_fresh():
+    entries = []
+    offset = 0
+    limit = 25
+    async with aiohttp.ClientSession() as session:
+        while True:
+            url = f"{LEADERBOARD_API}?limit={limit}&offset={offset}"
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                if response.status != 200:
+                    break
+                batch = await response.json()
+                if not batch:
+                    break
+                entries.extend(batch)
+                if len(batch) < limit:
+                    break
+                offset += limit
+    return entries
+
 def bytes_to_human(b):
     for unit in ["B", "KB", "MB", "GB", "TB"]:
         if b < 1024:
@@ -106,15 +125,22 @@ def build_leaderboard_page(entries, page, per_page=10):
         lines.append(f"#{e['rank']} **{e['discord_username']}** - {e['total_files']:,} files, {bytes_to_human(e['total_bytes'])}")
     return "\n".join(lines), total_pages
 
+def parse_time_str(s):
+    h = int(m.group(1)) if (m := re.search(r'(\d+)h', s, re.I)) else 0
+    mins = int(m.group(1)) if (m := re.search(r'(\d+)m', s, re.I)) else 0
+    secs = int(m.group(1)) if (m := re.search(r'(\d+)s', s, re.I)) else 0
+    return h * 3600 + mins * 60 + secs
+
 HELP_TEXT = (
     "**Minerva Bot Commands:**\n"
     "`!ping` - Check bot latency\n"
-    "`!status` - Check if the site is up\n"
+    "`!status` - Check if all services are up\n"
     "`!time` - Time left until Myrient deadline\n"
     "`!sheet` - Link to the tracking spreadsheet\n"
     "`!python / !bot` - Link to the bot source\n"
     "`!source / !sourcecode` - Link to the bot GitHub repo\n"
     "`!remind 1h30m (message)` - Set a reminder (supports h/m/s, max 24h)\n"
+    "`!listen 2m 30s` - Track your data uploads over time (DMs you updates)\n"
     "`!rank` - See your leaderboard rank\n"
     "`!rank (username)` - See someone else's rank\n"
     "`!rank list` - Browse the leaderboard with buttons\n"
@@ -173,14 +199,15 @@ async def ping(ctx):
     latency = round(bot.latency * 1000)
     await ctx.reply(f"Pong! `{latency}ms`")
 
-@bot.hybrid_command(name="status", description="Check if the site is up")
+@bot.hybrid_command(name="status", description="Check if all services are up")
 async def status(ctx):
+    await ctx.defer()
     site, api, gate = await asyncio.gather(
         check_url(URL),
         check_url(API_URL),
         check_url(GATE_URL),
     )
-    def mark(up): return "up" if up else "down"
+    def mark(up): return "🟢" if up else "🔴"
     await ctx.reply(
         f"minerva-archive.org: {mark(site)}\n"
         f"api.minerva-archive.org: {mark(api)}\n"
@@ -209,7 +236,7 @@ async def python_cmd(ctx):
 async def bot_cmd(ctx):
     await ctx.reply("https://gist.github.com/rlaphoenix/257b7aa65adacc154d8b5fa0b035b1e8")
 
-@bot.hybrid_command(name="source", description="Link to the bot source code")
+@bot.hybrid_command(name="source", description="Link to the bot GitHub repo")
 async def source_cmd(ctx):
     await ctx.reply("https://github.com/pixelkat5/MiNERVA-Project-Discord-bot")
 
@@ -249,9 +276,88 @@ async def remind(ctx, *, reminder: str):
         await ctx.channel.send(reminder_text)
     asyncio.create_task(send_reminder())
 
+@bot.hybrid_command(name="listen", description="Track your data uploads over time via DM")
+@app_commands.describe(args="duration and optional interval e.g. '2m 30s'")
+async def listen(ctx, *, args: str = None):
+    if not args:
+        await ctx.reply("Usage: `!listen 2m` or `!listen 2m 30s`", ephemeral=True)
+        return
+
+    # strip optional 'self' prefix
+    args = re.sub(r'^self\s+', '', args.strip(), flags=re.IGNORECASE)
+
+    # extract time tokens like 2m, 30s, 1h
+    time_tokens = re.findall(r'\d+[hms]', args, re.IGNORECASE)
+
+    if not time_tokens:
+        await ctx.reply("Couldn't parse a duration. Try `!listen 2m` or `!listen 2m 30s`", ephemeral=True)
+        return
+
+    duration = parse_time_str(time_tokens[0])
+    interval = parse_time_str(time_tokens[1]) if len(time_tokens) > 1 else 30
+
+    if duration <= 0 or interval <= 0:
+        await ctx.reply("Duration and interval must be greater than 0.", ephemeral=True)
+        return
+    if duration > 3600:
+        await ctx.reply("Max listen duration is 1 hour.", ephemeral=True)
+        return
+    if interval < 10:
+        await ctx.reply("Minimum interval is 10 seconds.", ephemeral=True)
+        return
+
+    try:
+        entries = await fetch_all_leaderboard()
+    except Exception:
+        await ctx.reply("Couldn't reach the leaderboard API right now.", ephemeral=True)
+        return
+
+    entry = find_user_with_fallback(entries, ctx.author)
+    if not entry:
+        await ctx.reply("Couldn't find you on the leaderboard.", ephemeral=True)
+        return
+
+    username = entry['discord_username']
+    initial_bytes = entry['total_bytes']
+    snapshots = [
+        f"Tracking **{username}** for {duration}s, checking every {interval}s.",
+        f"**Start:** {bytes_to_human(initial_bytes)}",
+    ]
+
+    try:
+        dm = await ctx.author.send("\n".join(snapshots))
+    except discord.Forbidden:
+        await ctx.reply("I couldn't DM you. Please enable DMs from server members.", ephemeral=True)
+        return
+
+    await ctx.reply("Check your DMs for live updates!", ephemeral=True)
+
+    elapsed = 0
+    prev_bytes = initial_bytes
+    while elapsed < duration:
+        await asyncio.sleep(interval)
+        elapsed += interval
+        try:
+            fresh = await fetch_leaderboard_fresh()
+            e = find_user(fresh, username)
+            if e:
+                diff = e['total_bytes'] - prev_bytes
+                sign = "+" if diff >= 0 else "-"
+                diff_str = f"{sign}{bytes_to_human(abs(diff))}"
+                snapshots.append(f"**t+{elapsed}s:** {bytes_to_human(e['total_bytes'])} ({diff_str})")
+                prev_bytes = e['total_bytes']
+        except Exception:
+            snapshots.append(f"**t+{elapsed}s:** (fetch failed)")
+
+        await dm.edit(content="\n".join(snapshots))
+
+    snapshots.append("**Done!**")
+    await dm.edit(content="\n".join(snapshots))
+
 @bot.hybrid_command(name="rank", description="See leaderboard rank")
 @app_commands.describe(args="username, 'list', 'data', or 'files' optionally followed by username")
 async def rank(ctx, *, args: str = None):
+    await ctx.defer()
     try:
         entries = await fetch_all_leaderboard()
     except Exception:
@@ -299,6 +405,7 @@ async def rank(ctx, *, args: str = None):
 @bot.hybrid_command(name="stats", description="See your archive stats")
 @app_commands.describe(filter="'files' or 'data'")
 async def stats(ctx, filter: str = None):
+    await ctx.defer()
     try:
         entries = await fetch_all_leaderboard()
     except Exception:
