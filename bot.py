@@ -116,7 +116,7 @@ async def on_message(message):
             await message.reply("The deadline has already passed.")
         return
 
-    # !rank / !rank (subcommand) / !rank (username) / !rank (subcommand) (username)
+    # !rank / !rank list / !rank list (page) / !rank (subcommand) / !rank (username) / !rank (subcommand) (username)
     if command == "!rank":
         try:
             entries = await fetch_all_leaderboard()
@@ -125,12 +125,27 @@ async def on_message(message):
             return
 
         subcommand = None
-        username = None
 
         if arg:
             arg_parts = arg.split(None, 1)
             first = arg_parts[0].lower()
-            if first in ["data", "files", "file"]:
+            if first == "list":
+                page = 1
+                if len(arg_parts) > 1 and arg_parts[1].isdigit():
+                    page = int(arg_parts[1])
+                per_page = 10
+                start = (page - 1) * per_page
+                page_entries = entries[start:start + per_page]
+                if not page_entries:
+                    await message.reply("No entries on that page.")
+                    return
+                total_pages = (len(entries) + per_page - 1) // per_page
+                lines = [f"**Leaderboard - Page {page}/{total_pages}**"]
+                for e in page_entries:
+                    lines.append(f"#{e['rank']} **{e['discord_username']}** - {e['total_files']:,} files, {bytes_to_human(e['total_bytes'])}")
+                await message.reply("\n".join(lines))
+                return
+            elif first in ["data", "files", "file"]:
                 subcommand = first
                 if len(arg_parts) > 1:
                     entry = find_user(entries, arg_parts[1])
@@ -187,14 +202,18 @@ async def on_message(message):
     if content == "!help":
         await message.reply(
             "**Minerva Bot Commands:**\n"
-            "`!ping` — Check bot latency\n"
-            "`!status` — Check if the site is up\n"
-            "`!time` — Time left until Myrient deadline\n"
-            "`!rank` — See your leaderboard rank\n"
-            "`!rank (username)` — See someone else's rank\n"
-            "`!stats` — See your full stats\n"
-            "`!stats files` — See your file count\n"
-            "`!stats data` — See your data amount\n"
+            "`!ping` - Check bot latency\n"
+            "`!status` - Check if the site is up\n"
+            "`!time` - Time left until Myrient deadline\n"
+            "`!rank` - See your leaderboard rank\n"
+            "`!rank (username)` - See someone else's rank\n"
+            "`!rank list` - Top 10 leaderboard\n"
+            "`!rank list (page)` - Leaderboard page\n"
+            "`!rank data / !rank files` - Your data or file count\n"
+            "`!rank data (user) / !rank files (user)` - Someone else's data or file count\n"
+            "`!stats` - See your full stats\n"
+            "`!stats files` - See your file count\n"
+            "`!stats data` - See your data amount\n"
         )
         return
 
@@ -203,8 +222,7 @@ async def on_message(message):
         await message.reply("March 31st.")
         return
 
-
-    # Good bot / bad bot / clanker — only if replying to the bot or mentioning it
+    # Good bot / bad bot / clanker - only if replying to the bot or mentioning it
     is_bot_referenced = (
         (message.reference and message.reference.resolved and message.reference.resolved.author == client.user)
         or client.user in message.mentions
