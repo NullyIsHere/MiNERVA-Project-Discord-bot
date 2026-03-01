@@ -110,7 +110,7 @@ async def on_message(message):
             await message.reply("The deadline has already passed.")
         return
 
-    # !rank / !rank (username)
+    # !rank / !rank (subcommand) / !rank (username) / !rank (subcommand) (username)
     if command == "!rank":
         try:
             entries = await fetch_all_leaderboard()
@@ -118,16 +118,35 @@ async def on_message(message):
             await message.reply("Couldn't reach the leaderboard API right now.")
             return
 
-        username = arg if arg else message.author.name
+        subcommand = None
+        username = None
+
+        if arg:
+            arg_parts = arg.split(None, 1)
+            first = arg_parts[0].lower()
+            if first in ["data", "files", "file"]:
+                subcommand = first
+                username = arg_parts[1] if len(arg_parts) > 1 else message.author.display_name
+            else:
+                username = arg
+        else:
+            username = message.author.display_name
+
         entry = find_user(entries, username)
 
-        if entry:
+        if not entry:
+            await message.reply(f"Couldn't find **{username}** on the leaderboard.")
+            return
+
+        if subcommand == "data":
+            await message.reply(f"**{entry['discord_username']}** has archived **{bytes_to_human(entry['total_bytes'])}** of data.")
+        elif subcommand in ["files", "file"]:
+            await message.reply(f"**{entry['discord_username']}** has archived **{entry['total_files']:,} files**.")
+        else:
             await message.reply(
                 f"**{entry['discord_username']}** is rank **#{entry['rank']}** "
                 f"with {entry['total_files']:,} files and {bytes_to_human(entry['total_bytes'])} archived."
             )
-        else:
-            await message.reply(f"Couldn't find **{username}** on the leaderboard.")
         return
 
     # !stats / !stats files / !stats data
@@ -138,7 +157,7 @@ async def on_message(message):
             await message.reply("Couldn't reach the leaderboard API right now.")
             return
 
-        username = message.author.name
+        username = message.author.display_name
         entry = find_user(entries, username)
 
         if not entry:
