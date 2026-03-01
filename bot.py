@@ -29,6 +29,11 @@ intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 
+# Cache
+_leaderboard_cache = None
+_leaderboard_cache_time = 0
+CACHE_TTL = 300  # 5 minutes
+
 async def check_site():
     try:
         async with aiohttp.ClientSession() as session:
@@ -38,6 +43,10 @@ async def check_site():
         return False
 
 async def fetch_all_leaderboard():
+    global _leaderboard_cache, _leaderboard_cache_time
+    import time
+    if _leaderboard_cache and (time.time() - _leaderboard_cache_time) < CACHE_TTL:
+        return _leaderboard_cache
     entries = []
     offset = 0
     limit = 25
@@ -54,6 +63,9 @@ async def fetch_all_leaderboard():
                 if len(batch) < limit:
                     break
                 offset += limit
+    import time
+    _leaderboard_cache = entries
+    _leaderboard_cache_time = time.time()
     return entries
 
 def bytes_to_human(b):
@@ -115,6 +127,24 @@ class LeaderboardView(discord.ui.View):
         for item in self.children:
             item.disabled = True
 
+HELP_TEXT = (
+    "**Minerva Bot Commands:**\n"
+    "`!ping` - Check bot latency\n"
+    "`!status` - Check if the site is up\n"
+    "`!time` - Time left until Myrient deadline\n"
+    "`!sheet` - Link to the tracking spreadsheet\n"
+    "`!remind 1h30m (message)` - Set a reminder (supports h/m/s, max 24h)\n"
+    "`!rank` - See your leaderboard rank\n"
+    "`!rank (username)` - See someone else's rank\n"
+    "`!rank list` - Browse the leaderboard with buttons\n"
+    "`!rank data / !rank files` - Your data or file count\n"
+    "`!rank data (user) / !rank files (user)` - Someone else's data or file count\n"
+    "`!stats` - See your full stats\n"
+    "`!stats files` - See your file count\n"
+    "`!stats data` - See your data amount\n"
+    "`!help / !list / !cmd / !command` - Show this list\n"
+)
+
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user}")
@@ -156,10 +186,15 @@ async def on_message(message):
             await message.reply("The deadline has already passed.")
         return
 
+    # !sheet
+    if content == "!sheet":
+        await message.reply("https://docs.google.com/spreadsheets/d/1FYHw-QYXnKFuzUhIZCIe3mmg8HR7ftg2sV9Ec_9cDwU/")
+        return
+
     # !remind
     if command == "!remind":
         if not arg:
-            await message.reply("Usage: `!remind 1h30m do the thing` — supports h, m, s")
+            await message.reply("Usage: `!remind 1h30m do the thing` - supports h, m, s")
             return
         time_match = re.match(r'^((?:\d+h)?(?:\d+m)?(?:\d+s)?)\s*(.*)?$', arg.strip(), re.IGNORECASE)
         if not time_match or not time_match.group(1):
@@ -191,7 +226,7 @@ async def on_message(message):
         asyncio.create_task(send_reminder())
         return
 
-    # !rank / !rank list / !rank list (page) / !rank (subcommand) / !rank (username) / !rank (subcommand) (username)
+    # !rank
     if command == "!rank":
         try:
             entries = await fetch_all_leaderboard()
@@ -238,7 +273,7 @@ async def on_message(message):
             )
         return
 
-    # !stats / !stats files / !stats data
+    # !stats
     if command == "!stats":
         try:
             entries = await fetch_all_leaderboard()
@@ -267,21 +302,7 @@ async def on_message(message):
 
     # !help / !list / !cmd / !command
     if content in ["!help", "!list", "!cmd", "!command"]:
-        await message.reply(
-            "**Minerva Bot Commands:**\n"
-            "`!ping` - Check bot latency\n"
-            "`!status` - Check if the site is up\n"
-            "`!time` - Time left until Myrient deadline\n"
-            "`!remind 1h30m (message)` - Set a reminder\n"
-            "`!rank` - See your leaderboard rank\n"
-            "`!rank (username)` - See someone else's rank\n"
-            "`!rank list` - Browse the leaderboard with buttons\n"
-            "`!rank data / !rank files` - Your data or file count\n"
-            "`!rank data (user) / !rank files (user)` - Someone else's data or file count\n"
-            "`!stats` - See your full stats\n"
-            "`!stats files` - See your file count\n"
-            "`!stats data` - See your data amount\n"
-        )
+        await message.reply(HELP_TEXT)
         return
 
     # Myrient shutdown question
