@@ -13,6 +13,7 @@ TOKEN = os.environ["DISCORD_TOKEN"]
 URL = "https://minerva-archive.org/"
 API_URL = "https://api.minerva-archive.org"
 GATE_URL = "https://gate.minerva-archive.org"
+GATE_UPLOAD_URL = "https://gate.minerva-archive.org/api/upload"
 LEADERBOARD_API = "https://minerva-archive.org/api/leaderboard"
 GIST_RAW_URL = "https://gist.githubusercontent.com/rlaphoenix/257b7aa65adacc154d8b5fa0b035b1e8/raw"
 
@@ -26,7 +27,8 @@ user_timezones = {}  # user ID -> timezone string
 DOWN_KEYWORDS = [
     "down", "offline", "not working", "broken", "unreachable",
     "cant access", "can't access", "unavailable", "not loading",
-    "wont load", "won't load", "dead"
+    "wont load", "won't load", "dead", "crashed", "crash",
+    "error", "not responding", "timed out", "timeout"
 ]
 
 UP_KEYWORDS = [
@@ -268,16 +270,18 @@ async def ping(ctx):
 async def status(ctx):
     if not await check_channel(ctx): return
     await ctx.defer()
-    site, api, gate = await asyncio.gather(
+    site, api, gate, upload = await asyncio.gather(
         check_url(URL),
         check_url(API_URL),
         check_url(GATE_URL),
+        check_url(GATE_UPLOAD_URL),
     )
     def mark(up): return "🟢" if up else "🔴"
     await ctx.reply(
         f"minerva-archive.org: {mark(site)}\n"
         f"api.minerva-archive.org: {mark(api)}\n"
-        f"gate.minerva-archive.org: {mark(gate)}"
+        f"gate.minerva-archive.org: {mark(gate)}\n"
+        f"gate.minerva-archive.org/api/upload: {mark(upload)}"
     )
 
 @bot.hybrid_command(name="time", description="Time left until Myrient deadline")
