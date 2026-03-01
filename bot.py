@@ -265,8 +265,8 @@ async def on_message(message):
             )
         return
 
-    # !help
-    if content == "!help":
+    # !help / !list / !cmd / !command
+    if content in ["!help", "!list", "!cmd", "!command"]:
         await message.reply(
             "**Minerva Bot Commands:**\n"
             "`!ping` - Check bot latency\n"
