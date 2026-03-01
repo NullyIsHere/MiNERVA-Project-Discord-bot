@@ -62,6 +62,9 @@ async def on_message(message):
         elif "clanker" in content:
             await message.reply(":(")
             return
+        elif "love" in content:
+            await message.reply("awww thanks <3")
+            return
 
     has_site_keyword = any(re.search(r'\b' + re.escape(kw) + r'\b', content) for kw in SITE_KEYWORDS)
 
