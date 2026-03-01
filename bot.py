@@ -46,6 +46,12 @@ async def on_message(message):
 
     content = message.content.lower()
 
+    # Commands
+    if content == "!ping":
+        latency = round(client.latency * 1000)
+        await message.reply(f"Current ping is around `{latency}ms`")
+        return
+
     if content == "!status":
         is_up = await check_site()
         if is_up:
@@ -54,13 +60,16 @@ async def on_message(message):
             await message.reply("❌ The site is down!")
         return
 
+    # Myrient shutdown question
+    if "myrient" in content and any(w in content for w in ["shutdown", "shut down", "closing", "close", "end", "when"]):
+        await message.reply("March 31st.")
+        return
+
     # Auto-remove links
-    '''
     if re.search(r'https?://|www\.', message.content):
         await message.delete()
         await message.channel.send(f"{message.author.mention}, sorry but we autoremove links to prevent piracy and our server getting taken down.")
         return
-    '''
 
     # Good bot / bad bot / clanker — only if replying to the bot or mentioning it
     is_bot_referenced = (
@@ -75,7 +84,7 @@ async def on_message(message):
         elif "bad bot" in content:
             await message.reply("sorry...")
             return
-        elif "clanker" in content:
+        elif "clanker" in content or "hate" in content:
             await message.reply(":(")
             return
         elif "love" in content:
@@ -85,6 +94,7 @@ async def on_message(message):
             await message.reply("hello :)")
             return
 
+    # Site status keywords
     has_site_keyword = any(re.search(r'\b' + re.escape(kw) + r'\b', content) for kw in SITE_KEYWORDS)
 
     if not has_site_keyword:
