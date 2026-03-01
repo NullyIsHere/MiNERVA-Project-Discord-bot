@@ -54,6 +54,14 @@ async def on_message(message):
             await message.reply("❌ The site is down!")
         return
 
+    # Auto-remove links
+    '''
+    if re.search(r'https?://|www\.', message.content):
+        await message.delete()
+        await message.channel.send(f"{message.author.mention}, sorry but we autoremove links to prevent piracy and our server getting taken down.")
+        return
+    '''
+
     # Good bot / bad bot / clanker — only if replying to the bot or mentioning it
     is_bot_referenced = (
         (message.reference and message.reference.resolved and message.reference.resolved.author == client.user)
@@ -72,6 +80,9 @@ async def on_message(message):
             return
         elif "love" in content:
             await message.reply("awww thanks <3")
+            return
+        elif content.strip() in ["hi", "hello", "hey", "hiya"]:
+            await message.reply("hello :)")
             return
 
     has_site_keyword = any(re.search(r'\b' + re.escape(kw) + r'\b', content) for kw in SITE_KEYWORDS)
