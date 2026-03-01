@@ -14,7 +14,11 @@ API_URL = "https://api.minerva-archive.org"
 GATE_URL = "https://gate.minerva-archive.org"
 LEADERBOARD_API = "https://minerva-archive.org/api/leaderboard"
 
+GIST_RAW_URL = "https://gist.githubusercontent.com/rlaphoenix/257b7aa65adacc154d8b5fa0b035b1e8/raw"
 COMMANDS_CHANNEL_ID = 1477718885502292164
+
+script_notify_users = set()  # user IDs who want update pings
+_last_known_version = None
 ALLOWED_ROLES = {"Project Lead", "Manager", "LORD HOARDER", "Moderator", "Developer"}
 
 DOWN_KEYWORDS = [
@@ -50,6 +54,38 @@ async def check_channel(ctx):
         return True
     await ctx.reply(f"Commands can only be used in <#1477718885502292164>.", ephemeral=True)
     return False
+
+async def fetch_script_version():
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(GIST_RAW_URL, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                if response.status != 200:
+                    return None
+                text = await response.text()
+                for line in text.splitlines():
+                    if line.strip().startswith("VERSION"):
+                        match = re.search(r'["\']([^"\']+)["\']', line)
+                        if match:
+                            return match.group(1)
+    except Exception:
+        pass
+    return None
+
+async def version_watcher():
+    global _last_known_version
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        version = await fetch_script_version()
+        if version and _last_known_version and version != _last_known_version:
+            for user_id in list(script_notify_users):
+                try:
+                    user = await bot.fetch_user(user_id)
+                    await user.send(f"Script updated! New version: `{version}` (was `{_last_known_version}`)\nhttps://gist.github.com/rlaphoenix/257b7aa65adacc154d8b5fa0b035b1e8")
+                except Exception:
+                    pass
+        if version:
+            _last_known_version = version
+        await asyncio.sleep(300)  # check every 5 minutes
 
 async def check_site():
     try:
@@ -153,6 +189,8 @@ HELP_TEXT = (
     "`!sheet` - Link to the tracking spreadsheet\n"
     "`!python / !bot` - Link to the bot source\n"
     "`!source / !sourcecode` - Link to the bot GitHub repo\n"
+    "`!script` - Show current upload script version\n"
+    "`!script notify` - Toggle DM pings for script updates\n"
     "`!remind 1h30m (message)` - Set a reminder (supports h/m/s, max 24h)\n"
     "`!listen 2m 30s` - Track your data uploads over time (DMs you updates)\n"
     "`!rank` - See your leaderboard rank\n"
@@ -206,6 +244,7 @@ class LeaderboardView(discord.ui.View):
 @bot.event
 async def on_ready():
     await bot.tree.sync()
+    bot.loop.create_task(version_watcher())
     print(f"Logged in as {bot.user}")
 
 @bot.hybrid_command(name="ping", description="Check bot latency")
@@ -265,6 +304,24 @@ async def source_cmd(ctx):
 async def sourcecode_cmd(ctx):
     if not await check_channel(ctx): return
     await ctx.reply("https://github.com/pixelkat5/MiNERVA-Project-Discord-bot")
+
+@bot.hybrid_command(name="script", description="Show script version or toggle update notifications")
+@app_commands.describe(action="leave blank for version, or 'notify' to toggle update pings")
+async def script(ctx, action: str = None):
+    if not await check_channel(ctx): return
+    if action and action.lower() == "notify":
+        if ctx.author.id in script_notify_users:
+            script_notify_users.discard(ctx.author.id)
+            await ctx.reply("You'll no longer be pinged for script updates.", ephemeral=True)
+        else:
+            script_notify_users.add(ctx.author.id)
+            await ctx.reply("You'll now be pinged via DM when the script updates.", ephemeral=True)
+    else:
+        version = await fetch_script_version()
+        if version:
+            await ctx.reply(f"Current script version: `{version}`\nhttps://gist.github.com/rlaphoenix/257b7aa65adacc154d8b5fa0b035b1e8")
+        else:
+            await ctx.reply("Couldn't fetch the script version right now.")
 
 @bot.hybrid_command(name="remind", description="Set a reminder")
 @app_commands.describe(reminder="e.g. 1h30m do the thing")
@@ -351,7 +408,8 @@ async def listen(ctx, *, args: str = None):
         await ctx.reply("I couldn't DM you. Please enable DMs from server members.", ephemeral=True)
         return
 
-    await ctx.reply("Check your DMs for live updates!", ephemeral=True)
+    if not isinstance(ctx.channel, discord.DMChannel):
+        await ctx.reply("Check your DMs for live updates!", ephemeral=True)
 
     elapsed = 0
     prev_bytes = initial_bytes
