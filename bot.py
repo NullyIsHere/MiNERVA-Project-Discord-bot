@@ -649,7 +649,13 @@ async def on_message(message):
     has_down_keyword = any(re.search(r'\b' + re.escape(kw) + r'\b', content) for kw in DOWN_KEYWORDS)
     has_up_keyword = any(re.search(r'\b' + re.escape(kw) + r'\b', content) for kw in UP_KEYWORDS)
 
-    is_up = await check_site()
+    results = await asyncio.gather(
+        check_url(URL),
+        check_url(API_URL),
+        check_url(GATE_URL),
+        check_url(GATE_UPLOAD_URL),
+    )
+    is_up = all(results)
 
     if has_down_keyword:
         if not is_up:
