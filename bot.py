@@ -367,10 +367,19 @@ async def listen(ctx, *, args: str = None):
         except Exception:
             snapshots.append(f"**t+{elapsed}s:** (fetch failed)")
 
-        await dm.edit(content="\n".join(snapshots))
+        new_content = "\n".join(snapshots)
+        if len(new_content) > 1900:
+            snapshots = [f"*(continued)*"]
+            dm = await ctx.author.send("\n".join(snapshots))
+        else:
+            await dm.edit(content=new_content)
 
     snapshots.append("**Done!**")
-    await dm.edit(content="\n".join(snapshots))
+    new_content = "\n".join(snapshots)
+    if len(new_content) > 1900:
+        await ctx.author.send("**Done!**")
+    else:
+        await dm.edit(content=new_content)
 
 @bot.hybrid_command(name="rank", description="See leaderboard rank")
 @app_commands.describe(args="username, 'list', 'data', or 'files' optionally followed by username")
@@ -523,9 +532,12 @@ async def on_message(message):
             await message.reply("Be patient -_-")
 
     elif has_up_keyword:
-        if is_up:
-            await message.add_reaction("✅")
-        else:
-            await message.add_reaction("❌")
+        try:
+            if is_up:
+                await message.add_reaction("✅")
+            else:
+                await message.add_reaction("❌")
+        except discord.NotFound:
+            pass
 
 bot.run(TOKEN)
