@@ -14,6 +14,9 @@ API_URL = "https://api.minerva-archive.org"
 GATE_URL = "https://gate.minerva-archive.org"
 LEADERBOARD_API = "https://minerva-archive.org/api/leaderboard"
 
+COMMANDS_CHANNEL_ID = 1477718885502292164
+ALLOWED_ROLES = {"Project Lead", "Manager", "LORD HOARDER", "Moderator", "Developer"}
+
 DOWN_KEYWORDS = [
     "down", "offline", "not working", "broken", "unreachable",
     "cant access", "can't access", "unavailable", "not loading",
@@ -36,6 +39,14 @@ intents = discord.Intents.default()
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+
+async def check_channel(ctx):
+    if ctx.channel.id == COMMANDS_CHANNEL_ID:
+        return True
+    if any(r.name in ALLOWED_ROLES for r in getattr(ctx.author, 'roles', [])):
+        return True
+    await ctx.reply(f"Commands can only be used in <#1477718885502292164>.", ephemeral=True)
+    return False
 
 async def check_site():
     try:
@@ -196,11 +207,13 @@ async def on_ready():
 
 @bot.hybrid_command(name="ping", description="Check bot latency")
 async def ping(ctx):
+    if not await check_channel(ctx): return
     latency = round(bot.latency * 1000)
     await ctx.reply(f"Pong! `{latency}ms`")
 
 @bot.hybrid_command(name="status", description="Check if all services are up")
 async def status(ctx):
+    if not await check_channel(ctx): return
     await ctx.defer()
     site, api, gate = await asyncio.gather(
         check_url(URL),
@@ -216,6 +229,7 @@ async def status(ctx):
 
 @bot.hybrid_command(name="time", description="Time left until Myrient deadline")
 async def time_cmd(ctx):
+    if not await check_channel(ctx): return
     deadline = datetime.datetime(2025, 3, 31, tzinfo=datetime.timezone.utc)
     now = datetime.datetime.now(datetime.timezone.utc)
     if now < deadline:
@@ -226,27 +240,33 @@ async def time_cmd(ctx):
 
 @bot.hybrid_command(name="sheet", description="Link to the tracking spreadsheet")
 async def sheet(ctx):
+    if not await check_channel(ctx): return
     await ctx.reply("https://docs.google.com/spreadsheets/d/1FYHw-QYXnKFuzUhIZCIe3mmg8HR7ftg2sV9Ec_9cDwU/")
 
 @bot.hybrid_command(name="python", description="Link to the bot source code")
 async def python_cmd(ctx):
+    if not await check_channel(ctx): return
     await ctx.reply("https://gist.github.com/rlaphoenix/257b7aa65adacc154d8b5fa0b035b1e8")
 
 @bot.command(name="bot")
 async def bot_cmd(ctx):
+    if not await check_channel(ctx): return
     await ctx.reply("https://gist.github.com/rlaphoenix/257b7aa65adacc154d8b5fa0b035b1e8")
 
 @bot.hybrid_command(name="source", description="Link to the bot GitHub repo")
 async def source_cmd(ctx):
+    if not await check_channel(ctx): return
     await ctx.reply("https://github.com/pixelkat5/MiNERVA-Project-Discord-bot")
 
 @bot.command(name="sourcecode")
 async def sourcecode_cmd(ctx):
+    if not await check_channel(ctx): return
     await ctx.reply("https://github.com/pixelkat5/MiNERVA-Project-Discord-bot")
 
 @bot.hybrid_command(name="remind", description="Set a reminder")
 @app_commands.describe(reminder="e.g. 1h30m do the thing")
 async def remind(ctx, *, reminder: str):
+    if not await check_channel(ctx): return
     time_match = re.match(r'^((?:\d+h)?(?:\d+m)?(?:\d+s)?)\s*(.*)?$', reminder.strip(), re.IGNORECASE)
     if not time_match or not time_match.group(1):
         await ctx.reply("Couldn't parse that time. Try something like `!remind 1h`, `!remind 30m`, `!remind 1h30m10s`")
@@ -279,14 +299,12 @@ async def remind(ctx, *, reminder: str):
 @bot.hybrid_command(name="listen", description="Track your data uploads over time via DM")
 @app_commands.describe(args="duration and optional interval e.g. '2m 30s'")
 async def listen(ctx, *, args: str = None):
+    if not await check_channel(ctx): return
     if not args:
         await ctx.reply("Usage: `!listen 2m` or `!listen 2m 30s`", ephemeral=True)
         return
 
-    # strip optional 'self' prefix
     args = re.sub(r'^self\s+', '', args.strip(), flags=re.IGNORECASE)
-
-    # extract time tokens like 2m, 30s, 1h
     time_tokens = re.findall(r'\d+[hms]', args, re.IGNORECASE)
 
     if not time_tokens:
@@ -357,6 +375,7 @@ async def listen(ctx, *, args: str = None):
 @bot.hybrid_command(name="rank", description="See leaderboard rank")
 @app_commands.describe(args="username, 'list', 'data', or 'files' optionally followed by username")
 async def rank(ctx, *, args: str = None):
+    if not await check_channel(ctx): return
     await ctx.defer()
     try:
         entries = await fetch_all_leaderboard()
@@ -405,6 +424,7 @@ async def rank(ctx, *, args: str = None):
 @bot.hybrid_command(name="stats", description="See your archive stats")
 @app_commands.describe(filter="'files' or 'data'")
 async def stats(ctx, filter: str = None):
+    if not await check_channel(ctx): return
     await ctx.defer()
     try:
         entries = await fetch_all_leaderboard()
@@ -432,18 +452,22 @@ async def stats(ctx, filter: str = None):
 
 @bot.hybrid_command(name="help", description="Show all commands")
 async def help_cmd(ctx):
+    if not await check_channel(ctx): return
     await ctx.reply(HELP_TEXT)
 
 @bot.command(name="list")
 async def list_cmd(ctx):
+    if not await check_channel(ctx): return
     await ctx.reply(HELP_TEXT)
 
 @bot.command(name="cmd")
 async def cmd_cmd(ctx):
+    if not await check_channel(ctx): return
     await ctx.reply(HELP_TEXT)
 
 @bot.command(name="command")
 async def command_cmd(ctx):
+    if not await check_channel(ctx): return
     await ctx.reply(HELP_TEXT)
 
 @bot.event
