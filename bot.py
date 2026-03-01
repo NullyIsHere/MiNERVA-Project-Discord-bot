@@ -1,5 +1,6 @@
 import discord
 import aiohttp
+import asyncio
 import os
 import re
 
@@ -75,6 +76,45 @@ def find_user_with_fallback(entries, member):
         entry = find_user(entries, member.name)
     return entry
 
+def build_leaderboard_page(entries, page, per_page=10):
+    total_pages = (len(entries) + per_page - 1) // per_page
+    start = (page - 1) * per_page
+    page_entries = entries[start:start + per_page]
+    lines = [f"**Leaderboard - Page {page}/{total_pages}**"]
+    for e in page_entries:
+        lines.append(f"#{e['rank']} **{e['discord_username']}** - {e['total_files']:,} files, {bytes_to_human(e['total_bytes'])}")
+    return "\n".join(lines), total_pages
+
+class LeaderboardView(discord.ui.View):
+    def __init__(self, entries, page, total_pages):
+        super().__init__(timeout=60)
+        self.entries = entries
+        self.page = page
+        self.total_pages = total_pages
+        self.update_buttons()
+
+    def update_buttons(self):
+        self.prev_button.disabled = self.page <= 1
+        self.next_button.disabled = self.page >= self.total_pages
+
+    @discord.ui.button(label="< Prev", style=discord.ButtonStyle.secondary)
+    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page -= 1
+        self.update_buttons()
+        content, _ = build_leaderboard_page(self.entries, self.page)
+        await interaction.response.edit_message(content=content, view=self)
+
+    @discord.ui.button(label="Next >", style=discord.ButtonStyle.secondary)
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page += 1
+        self.update_buttons()
+        content, _ = build_leaderboard_page(self.entries, self.page)
+        await interaction.response.edit_message(content=content, view=self)
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user}")
@@ -116,6 +156,41 @@ async def on_message(message):
             await message.reply("The deadline has already passed.")
         return
 
+    # !remind
+    if command == "!remind":
+        if not arg:
+            await message.reply("Usage: `!remind 1h30m do the thing` — supports h, m, s")
+            return
+        time_match = re.match(r'^((?:\d+h)?(?:\d+m)?(?:\d+s)?)\s*(.*)?$', arg.strip(), re.IGNORECASE)
+        if not time_match or not time_match.group(1):
+            await message.reply("Couldn't parse that time. Try something like `!remind 1h`, `!remind 30m`, `!remind 1h30m10s`")
+            return
+        time_str = time_match.group(1)
+        remind_msg = time_match.group(2).strip() if time_match.group(2) else None
+        hours = int(h.group(1)) if (h := re.search(r'(\d+)h', time_str, re.I)) else 0
+        minutes = int(m.group(1)) if (m := re.search(r'(\d+)m', time_str, re.I)) else 0
+        seconds = int(s.group(1)) if (s := re.search(r'(\d+)s', time_str, re.I)) else 0
+        total_seconds = hours * 3600 + minutes * 60 + seconds
+        if total_seconds <= 0:
+            await message.reply("Time must be greater than 0.")
+            return
+        if total_seconds > 86400:
+            await message.reply("Max reminder time is 24 hours.")
+            return
+        parts_str = []
+        if hours: parts_str.append(f"{hours}h")
+        if minutes: parts_str.append(f"{minutes}m")
+        if seconds: parts_str.append(f"{seconds}s")
+        await message.reply(f"Got it! Reminding you in {''.join(parts_str)}.")
+        async def send_reminder():
+            await asyncio.sleep(total_seconds)
+            reminder_text = f"{message.author.mention}, reminder!"
+            if remind_msg:
+                reminder_text += f" {remind_msg}"
+            await message.channel.send(reminder_text)
+        asyncio.create_task(send_reminder())
+        return
+
     # !rank / !rank list / !rank list (page) / !rank (subcommand) / !rank (username) / !rank (subcommand) (username)
     if command == "!rank":
         try:
@@ -133,17 +208,9 @@ async def on_message(message):
                 page = 1
                 if len(arg_parts) > 1 and arg_parts[1].isdigit():
                     page = int(arg_parts[1])
-                per_page = 10
-                start = (page - 1) * per_page
-                page_entries = entries[start:start + per_page]
-                if not page_entries:
-                    await message.reply("No entries on that page.")
-                    return
-                total_pages = (len(entries) + per_page - 1) // per_page
-                lines = [f"**Leaderboard - Page {page}/{total_pages}**"]
-                for e in page_entries:
-                    lines.append(f"#{e['rank']} **{e['discord_username']}** - {e['total_files']:,} files, {bytes_to_human(e['total_bytes'])}")
-                await message.reply("\n".join(lines))
+                page_content, total_pages = build_leaderboard_page(entries, page)
+                view = LeaderboardView(entries, page, total_pages)
+                await message.reply(page_content, view=view)
                 return
             elif first in ["data", "files", "file"]:
                 subcommand = first
@@ -205,10 +272,10 @@ async def on_message(message):
             "`!ping` - Check bot latency\n"
             "`!status` - Check if the site is up\n"
             "`!time` - Time left until Myrient deadline\n"
+            "`!remind 1h30m (message)` - Set a reminder\n"
             "`!rank` - See your leaderboard rank\n"
             "`!rank (username)` - See someone else's rank\n"
-            "`!rank list` - Top 10 leaderboard\n"
-            "`!rank list (page)` - Leaderboard page\n"
+            "`!rank list` - Browse the leaderboard with buttons\n"
             "`!rank data / !rank files` - Your data or file count\n"
             "`!rank data (user) / !rank files (user)` - Someone else's data or file count\n"
             "`!stats` - See your full stats\n"
