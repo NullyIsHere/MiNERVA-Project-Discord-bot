@@ -89,6 +89,7 @@ def has_keyword(content, keywords):
     return any(re.search(r'\b' + re.escape(kw) + r'\b', content) for kw in keywords)
 
 
+def bytes_to_human(b):
     for unit in ["B", "KB", "MB", "GB", "TB"]:
         if b < 1024:
             return f"{b:.2f} {unit}"
@@ -495,7 +496,7 @@ async def listen(ctx, *, args: str = None):
             try:
                 await dm.edit(content=new_content)
             except discord.DiscordServerError:
-                pass
+                pass  # transient Discord outage, retry next interval
 
     snapshots.append("**Done!**")
     new_content = "\n".join(snapshots)
