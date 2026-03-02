@@ -8,10 +8,12 @@ import re
 import time
 import datetime
 import zoneinfo
+import asyncpg
 
 # ---- CONFIG ----
 
-TOKEN = os.environ["DISCORD_TOKEN"]
+TOKEN        = os.environ["DISCORD_TOKEN"]
+DATABASE_URL = os.environ["DATABASE_URL"]
 
 ENDPOINTS = [
     ("minerva-archive.org",              "https://minerva-archive.org/"),
@@ -44,7 +46,7 @@ HELP_TEXT = (
     "**Minerva Bot Commands:**\n"
     "`!ping` - Check bot latency\n"
     "`!status` - Check if all services are up\n"
-    "`!status fast 1-4` - Check a single endpoint\n"
+    "`!status fast 1-5` - Check a single endpoint\n"
     "`!time` - Time left until Myrient deadline\n"
     "`!sheet` - Link to the tracking spreadsheet\n"
     "`!python / !bot` - Link to the bot source\n"
@@ -53,8 +55,11 @@ HELP_TEXT = (
     "`!script notify` - Toggle DM pings for script updates\n"
     "`!remind 1h30m (message)` - Set a reminder by duration\n"
     "`!remind 4/1/26` - Set a reminder by date (midnight in your timezone)\n"
+    "`!reminders` - List your pending reminders\n"
+    "`!remind cancel <id>` - Cancel a pending reminder\n"
     "`!timezone US/Central` - Set your timezone for date reminders\n"
     "`!listen 2m 30s` - Track your data uploads over time (DMs you updates)\n"
+    "`!listens` - View your past listen sessions\n"
     "`!pfp (@user)` - Show a user's profile picture\n"
     "`!rank` - See your leaderboard rank\n"
     "`!rank (username)` - See someone else's rank\n"
@@ -69,17 +74,55 @@ HELP_TEXT = (
 
 # ---- STATE ----
 
-script_notify_users = set()
 _last_known_version = None
-user_timezones      = {}
 _leaderboard_cache  = None
 _leaderboard_cache_time = 0
+db: asyncpg.Pool = None
 
 # ---- BOT SETUP ----
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+
+# ---- DB SETUP ----
+
+async def init_db():
+    global db
+    db = await asyncpg.create_pool(DATABASE_URL)
+    async with db.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_timezones (
+                user_id BIGINT PRIMARY KEY,
+                timezone TEXT NOT NULL
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS script_notify (
+                user_id BIGINT PRIMARY KEY
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS reminders (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                channel_id BIGINT NOT NULL,
+                message TEXT,
+                remind_at TIMESTAMPTZ NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS listen_sessions (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                username TEXT NOT NULL,
+                started_at TIMESTAMPTZ DEFAULT NOW(),
+                duration_seconds INT NOT NULL,
+                interval_seconds INT NOT NULL,
+                snapshots JSONB NOT NULL DEFAULT '[]'
+            )
+        """)
 
 # ---- HELPERS ----
 
@@ -184,6 +227,10 @@ async def get_leaderboard_or_error(ctx):
         await ctx.reply("Couldn't reach the leaderboard API right now.")
         return None
 
+async def get_user_timezone(user_id):
+    row = await db.fetchrow("SELECT timezone FROM user_timezones WHERE user_id = $1", user_id)
+    return row["timezone"] if row else "US/Central"
+
 def make_link_command(name, url, description):
     @bot.hybrid_command(name=name, description=description)
     async def _cmd(ctx):
@@ -194,15 +241,37 @@ def make_link_command(name, url, description):
 
 # ---- BACKGROUND TASKS ----
 
+async def reminder_loop():
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        now = datetime.datetime.now(datetime.timezone.utc)
+        rows = await db.fetch("SELECT * FROM reminders WHERE remind_at <= $1", now)
+        for row in rows:
+            try:
+                channel = bot.get_channel(row["channel_id"])
+                user = bot.get_user(row["user_id"]) or await bot.fetch_user(row["user_id"])
+                text = f"{user.mention}, reminder!"
+                if row["message"]:
+                    text += f" {row['message']}"
+                if channel:
+                    await channel.send(text)
+                else:
+                    await user.send(text)
+            except Exception:
+                pass
+            await db.execute("DELETE FROM reminders WHERE id = $1", row["id"])
+        await asyncio.sleep(15)
+
 async def version_watcher():
     global _last_known_version
     await bot.wait_until_ready()
     while not bot.is_closed():
         version = await fetch_script_version()
         if version and _last_known_version and version != _last_known_version:
-            for user_id in list(script_notify_users):
+            rows = await db.fetch("SELECT user_id FROM script_notify")
+            for row in rows:
                 try:
-                    user = await bot.fetch_user(user_id)
+                    user = await bot.fetch_user(row["user_id"])
                     await user.send(f"Script updated! New version: `{version}` (was `{_last_known_version}`)\n{GIST_URL}")
                 except Exception:
                     pass
@@ -264,7 +333,9 @@ class LeaderboardView(discord.ui.View):
 
 @bot.event
 async def on_ready():
+    await init_db()
     await bot.tree.sync()
+    bot.loop.create_task(reminder_loop())
     bot.loop.create_task(version_watcher())
     bot.loop.create_task(status_watcher())
     print(f"Logged in as {bot.user}")
@@ -276,7 +347,6 @@ async def on_message(message):
     await bot.process_commands(message)
     content = message.content.lower().strip()
 
-    # Simple keyword responses — no channel restriction
     if "boing" in content:
         await message.reply("boing boing")
         return
@@ -289,7 +359,7 @@ async def on_message(message):
         await message.reply("I hate that dude -3-")
         return
 
-    if "love" in content and "minerva" in content:
+    if re.search(r'\blove\b', content) and re.search(r'\bminerva\b', content) and re.search(r'\bbot\b', content):
         await message.reply("I love that dude1!11!1,.!!")
         return
 
@@ -302,15 +372,11 @@ async def on_message(message):
         or bot.user in message.mentions
     )
     if is_bot_referenced:
-        responses = {
-            "good bot":  "thank you :)",
-            "bad bot":   "sorry...",
-        }
-        for trigger, reply in responses.items():
-            if trigger in content:
-                await message.reply(reply)
-                return
-        if "clanker" in content or "hate" in content:
+        if "good bot" in content:
+            await message.reply("thank you :)")
+        elif "bad bot" in content:
+            await message.reply("sorry...")
+        elif "clanker" in content or "hate" in content:
             await message.reply(":(")
         elif "love" in content:
             await message.reply("awww thanks <3")
@@ -339,14 +405,14 @@ async def ping(ctx):
     await ctx.reply(f"Pong! `{round(bot.latency * 1000)}ms`")
 
 @bot.hybrid_command(name="status", description="Check if all services are up")
-@app_commands.describe(mode="leave blank for full check, or 'fast 1-4' for a single endpoint")
+@app_commands.describe(mode="leave blank for full check, or 'fast 1-5' for a single endpoint")
 async def status(ctx, mode: str = None, endpoint: int = None):
     if not await check_channel(ctx): return
     await ctx.defer()
     mark = lambda up: "🟢" if up else "🔴"
     if mode and mode.lower() == "fast" and endpoint:
-        if not 1 <= endpoint <= 4:
-            await ctx.reply("Endpoint must be 1-4.")
+        if not 1 <= endpoint <= len(ENDPOINTS):
+            await ctx.reply(f"Endpoint must be 1-{len(ENDPOINTS)}.")
             return
         name, url = ENDPOINTS[endpoint - 1]
         await ctx.reply(f"{name}: {mark(await check_url(url))}")
@@ -365,7 +431,6 @@ async def time_cmd(ctx):
     else:
         await ctx.reply("The deadline has already passed.")
 
-# Link commands
 make_link_command("sheet",  SHEET_URL,  "Link to the tracking spreadsheet")
 make_link_command("source", SOURCE_URL, "Link to the bot GitHub repo")
 make_link_command("python", GIST_URL,   "Link to the bot source code (gist)")
@@ -385,11 +450,12 @@ async def sourcecode_cmd(ctx):
 async def script(ctx, action: str = None):
     if not await check_channel(ctx): return
     if action and action.lower() == "notify":
-        if ctx.author.id in script_notify_users:
-            script_notify_users.discard(ctx.author.id)
+        exists = await db.fetchrow("SELECT 1 FROM script_notify WHERE user_id = $1", ctx.author.id)
+        if exists:
+            await db.execute("DELETE FROM script_notify WHERE user_id = $1", ctx.author.id)
             await ctx.reply("You'll no longer be pinged for script updates.", ephemeral=True)
         else:
-            script_notify_users.add(ctx.author.id)
+            await db.execute("INSERT INTO script_notify (user_id) VALUES ($1) ON CONFLICT DO NOTHING", ctx.author.id)
             await ctx.reply("You'll now be pinged via DM when the script updates.", ephemeral=True)
     else:
         version = await fetch_script_version()
@@ -401,7 +467,10 @@ async def timezone_cmd(ctx, tz: str):
     if not await check_channel(ctx): return
     try:
         zoneinfo.ZoneInfo(tz)
-        user_timezones[ctx.author.id] = tz
+        await db.execute("""
+            INSERT INTO user_timezones (user_id, timezone) VALUES ($1, $2)
+            ON CONFLICT (user_id) DO UPDATE SET timezone = $2
+        """, ctx.author.id, tz)
         await ctx.reply(f"Timezone set to `{tz}`.", ephemeral=True)
     except Exception:
         await ctx.reply(f"Unknown timezone `{tz}`. Try `US/Central`, `US/Eastern`, `US/Pacific`, or `UTC`.", ephemeral=True)
@@ -417,32 +486,45 @@ async def pfp(ctx, user: discord.Member = None):
     await ctx.reply(embed=embed)
 
 @bot.hybrid_command(name="remind", description="Set a reminder by duration or date")
-@app_commands.describe(reminder="e.g. 1h30m, 30m do the thing, or 4/1/26")
+@app_commands.describe(reminder="e.g. 1h30m, 30m do the thing, 4/1/26, or 'cancel <id>'")
 async def remind(ctx, *, reminder: str):
     if not await check_channel(ctx): return
 
+    # cancel subcommand
+    cancel_match = re.match(r'^cancel\s+(\d+)$', reminder.strip(), re.IGNORECASE)
+    if cancel_match:
+        rid = int(cancel_match.group(1))
+        row = await db.fetchrow("SELECT * FROM reminders WHERE id = $1 AND user_id = $2", rid, ctx.author.id)
+        if not row:
+            await ctx.reply(f"No reminder found with ID `{rid}`.", ephemeral=True)
+            return
+        await db.execute("DELETE FROM reminders WHERE id = $1", rid)
+        await ctx.reply(f"Reminder `{rid}` cancelled.", ephemeral=True)
+        return
+
+    # date reminder
     date_match = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{2}|\d{4})$', reminder.strip())
     if date_match:
         month, day, year = int(date_match.group(1)), int(date_match.group(2)), int(date_match.group(3))
         if year < 100: year += 2000
-        tz_name = user_timezones.get(ctx.author.id, "US/Central")
+        tz_name = await get_user_timezone(ctx.author.id)
         try:
             tz = zoneinfo.ZoneInfo(tz_name)
             remind_dt = datetime.datetime(year, month, day, tzinfo=tz)
         except Exception:
             await ctx.reply("Invalid date.")
             return
-        total_seconds = (remind_dt - datetime.datetime.now(tz=tz)).total_seconds()
-        if total_seconds <= 0:
+        if (remind_dt - datetime.datetime.now(tz=tz)).total_seconds() <= 0:
             await ctx.reply("That date is in the past.")
             return
+        await db.execute(
+            "INSERT INTO reminders (user_id, channel_id, message, remind_at) VALUES ($1, $2, $3, $4)",
+            ctx.author.id, ctx.channel.id, f"It's {month}/{day}/{year}.", remind_dt
+        )
         await ctx.reply(f"Got it! Reminding you on <t:{int(remind_dt.timestamp())}:D> at midnight {tz_name}.")
-        async def send_date_reminder():
-            await asyncio.sleep(total_seconds)
-            await ctx.channel.send(f"{ctx.author.mention}, reminder! It's {month}/{day}/{year}.")
-        asyncio.create_task(send_date_reminder())
         return
 
+    # duration reminder
     time_match = re.match(r'^((?:\d+h)?(?:\d+m)?(?:\d+s)?)\s*(.*)?$', reminder.strip(), re.IGNORECASE)
     if not time_match or not time_match.group(1):
         await ctx.reply("Couldn't parse that. Try `!remind 1h30m`, `!remind 30m do the thing`, or `!remind 4/1/26`.")
@@ -455,11 +537,26 @@ async def remind(ctx, *, reminder: str):
     if total_seconds > 86400:
         await ctx.reply("Max reminder time is 24 hours.")
         return
+    remind_dt = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=total_seconds)
+    await db.execute(
+        "INSERT INTO reminders (user_id, channel_id, message, remind_at) VALUES ($1, $2, $3, $4)",
+        ctx.author.id, ctx.channel.id, remind_msg, remind_dt
+    )
     await ctx.reply(f"Got it! Reminding you in {format_duration(total_seconds)}.")
-    async def send_reminder():
-        await asyncio.sleep(total_seconds)
-        await ctx.channel.send(f"{ctx.author.mention}, reminder!{' ' + remind_msg if remind_msg else ''}")
-    asyncio.create_task(send_reminder())
+
+@bot.hybrid_command(name="reminders", description="List your pending reminders")
+async def reminders_cmd(ctx):
+    if not await check_channel(ctx): return
+    rows = await db.fetch("SELECT * FROM reminders WHERE user_id = $1 ORDER BY remind_at", ctx.author.id)
+    if not rows:
+        await ctx.reply("You have no pending reminders.", ephemeral=True)
+        return
+    lines = ["**Your pending reminders:**"]
+    for row in rows:
+        ts = int(row["remind_at"].timestamp())
+        msg = f" — {row['message']}" if row["message"] else ""
+        lines.append(f"`#{row['id']}` <t:{ts}:F>{msg}")
+    await ctx.reply("\n".join(lines), ephemeral=True)
 
 @bot.hybrid_command(name="listen", description="Track your data uploads over time via DM")
 @app_commands.describe(args="duration and optional interval e.g. '2m 30s'")
@@ -496,13 +593,14 @@ async def listen(ctx, *, args: str = None):
         return
 
     username, prev_bytes = entry['discord_username'], entry['total_bytes']
-    snapshots = [
+    snapshots = [{"t": 0, "bytes": prev_bytes}]
+    lines = [
         f"Tracking **{username}** for {format_duration(duration)}, checking every {format_duration(interval)}.",
         f"**Start:** {bytes_to_human(prev_bytes)}",
     ]
 
     try:
-        dm = await ctx.author.send("\n".join(snapshots))
+        dm = await ctx.author.send("\n".join(lines))
     except discord.Forbidden:
         await ctx.reply("I couldn't DM you. Please enable DMs from server members.", ephemeral=True)
         return
@@ -519,24 +617,57 @@ async def listen(ctx, *, args: str = None):
             e = find_user(fresh, username)
             if e:
                 diff = e['total_bytes'] - prev_bytes
-                snapshots.append(f"**t+{elapsed}s:** {bytes_to_human(e['total_bytes'])} ({'+' if diff >= 0 else '-'}{bytes_to_human(abs(diff))})")
+                lines.append(f"**t+{elapsed}s:** {bytes_to_human(e['total_bytes'])} ({'+' if diff >= 0 else '-'}{bytes_to_human(abs(diff))})")
+                snapshots.append({"t": elapsed, "bytes": e['total_bytes']})
                 prev_bytes = e['total_bytes']
         except Exception:
-            snapshots.append(f"**t+{elapsed}s:** (fetch failed)")
+            lines.append(f"**t+{elapsed}s:** (fetch failed)")
 
-        new_content = "\n".join(snapshots)
+        new_content = "\n".join(lines)
         if len(new_content) > 1900:
-            snapshots = ["*(continued)*"]
-            dm = await ctx.author.send("\n".join(snapshots))
+            lines = ["*(continued)*"]
+            dm = await ctx.author.send("\n".join(lines))
         else:
             await dm.edit(content=new_content)
 
-    snapshots.append("**Done!**")
-    new_content = "\n".join(snapshots)
+    lines.append("**Done!**")
+    new_content = "\n".join(lines)
     if len(new_content) > 1900:
         await ctx.author.send("**Done!**")
     else:
         await dm.edit(content=new_content)
+
+    # save session to db
+    import json
+    await db.execute(
+        "INSERT INTO listen_sessions (user_id, username, duration_seconds, interval_seconds, snapshots) VALUES ($1, $2, $3, $4, $5)",
+        ctx.author.id, username, duration, interval, json.dumps(snapshots)
+    )
+
+@bot.hybrid_command(name="listens", description="View your past listen sessions")
+async def listens_cmd(ctx):
+    if not await check_channel(ctx): return
+    rows = await db.fetch(
+        "SELECT * FROM listen_sessions WHERE user_id = $1 ORDER BY started_at DESC LIMIT 10",
+        ctx.author.id
+    )
+    if not rows:
+        await ctx.reply("You have no past listen sessions.", ephemeral=True)
+        return
+    import json
+    lines = ["**Your last 10 listen sessions:**"]
+    for row in rows:
+        snaps = json.loads(row["snapshots"])
+        start_bytes = snaps[0]["bytes"] if snaps else 0
+        end_bytes   = snaps[-1]["bytes"] if snaps else 0
+        diff        = end_bytes - start_bytes
+        ts          = int(row["started_at"].timestamp())
+        lines.append(
+            f"<t:{ts}:D> — **{row['username']}** | "
+            f"{format_duration(row['duration_seconds'])} session | "
+            f"+{bytes_to_human(diff)} uploaded"
+        )
+    await ctx.reply("\n".join(lines), ephemeral=True)
 
 @bot.hybrid_command(name="rank", description="See leaderboard rank")
 @app_commands.describe(args="username, 'list', 'data', or 'files' optionally followed by username")
@@ -584,7 +715,7 @@ async def stats(ctx, filter: str = None):
     if entries is None: return
     entry = find_user_with_fallback(entries, ctx.author)
     if not entry:
-        await ctx.reply("sorry but we couldn't find you on the leaderboard. pwp")
+        await ctx.reply("Couldn't find you on the leaderboard.")
         return
 
     name = entry['discord_username']
