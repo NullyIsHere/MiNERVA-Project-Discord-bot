@@ -50,6 +50,7 @@ HELP_TEXT = (
     "`!sheet` - Link to the tracking spreadsheet\n"
     "`!python / !bot` - Link to the bot source\n"
     "`!source / !sourcecode` - Link to the bot GitHub repo\n"
+    "`!download` - Link to the Minerva worker download\n"
     "`!script` - Show current upload script version\n"
     "`!script notify` - Toggle DM pings for script updates\n"
     "`!remind 1h30m (message)` - Set a reminder by duration\n"
@@ -206,7 +207,7 @@ async def version_watcher():
             for user_id in list(script_notify_users):
                 try:
                     user = await bot.fetch_user(user_id)
-                    await user.send(f"Script updated! New version: `{version}` (was `{_last_known_version}`)\n{GIST_URL}")
+                    await user.send(f"Script updated! New version: `{version}` (was `{_last_known_version}`)\n{DOWNLOAD_URL}")
                 except Exception:
                     pass
         if version:
@@ -329,14 +330,17 @@ async def time_cmd(ctx):
         await ctx.reply("The deadline has already passed.")
 
 # Link commands
-make_link_command("sheet",  SHEET_URL,  "Link to the tracking spreadsheet")
-make_link_command("source", SOURCE_URL, "Link to the bot GitHub repo")
-make_link_command("python", GIST_URL,   "Link to the bot source code (gist)")
+DOWNLOAD_URL = "https://minerva-archive.org/worker/download"
+
+make_link_command("sheet",    SHEET_URL,    "Link to the tracking spreadsheet")
+make_link_command("source",   SOURCE_URL,   "Link to the bot GitHub repo")
+make_link_command("python",   DOWNLOAD_URL, "Link to the Minerva worker script")
+make_link_command("download", DOWNLOAD_URL, "Link to the Minerva worker download")
 
 @bot.command(name="bot")
 async def bot_cmd(ctx):
     if not await check_channel(ctx): return
-    await ctx.reply(GIST_URL)
+    await ctx.reply(DOWNLOAD_URL)
 
 @bot.command(name="sourcecode")
 async def sourcecode_cmd(ctx):
@@ -356,7 +360,7 @@ async def script(ctx, action: str = None):
             await ctx.reply("You'll now be pinged via DM when the script updates.", ephemeral=True)
     else:
         version = await fetch_script_version()
-        await ctx.reply(f"Current script version: `{version}`\n{GIST_URL}" if version else "Couldn't fetch the script version right now.")
+        await ctx.reply(f"Current script version: `{version}`\n{DOWNLOAD_URL}" if version else "Couldn't fetch the script version right now.")
 
 @bot.hybrid_command(name="timezone", description="Set your timezone for date reminders")
 @app_commands.describe(tz="e.g. US/Central, US/Eastern, US/Pacific, UTC")
