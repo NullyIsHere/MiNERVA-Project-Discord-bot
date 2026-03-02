@@ -267,22 +267,29 @@ async def ping(ctx):
     await ctx.reply(f"Pong! `{latency}ms`")
 
 @bot.hybrid_command(name="status", description="Check if all services are up")
-async def status(ctx):
+@app_commands.describe(mode="leave blank for full check, or 'fast 1-4' for a single endpoint")
+async def status(ctx, mode: str = None, endpoint: int = None):
     if not await check_channel(ctx): return
     await ctx.defer()
-    site, api, gate, upload = await asyncio.gather(
-        check_url(URL),
-        check_url(API_URL),
-        check_url(GATE_URL),
-        check_url(GATE_UPLOAD_URL),
-    )
     def mark(up): return "🟢" if up else "🔴"
-    await ctx.reply(
-        f"minerva-archive.org: {mark(site)}\n"
-        f"api.minerva-archive.org: {mark(api)}\n"
-        f"gate.minerva-archive.org: {mark(gate)}\n"
-        f"gate.minerva-archive.org/api/upload: {mark(upload)}"
-    )
+
+    endpoints = [
+        ("minerva-archive.org", URL),
+        ("api.minerva-archive.org", API_URL),
+        ("gate.minerva-archive.org", GATE_URL),
+        ("gate.minerva-archive.org/api/upload", GATE_UPLOAD_URL),
+    ]
+
+    if mode and mode.lower() == "fast" and endpoint:
+        if endpoint < 1 or endpoint > 4:
+            await ctx.reply("Endpoint must be 1-4.")
+            return
+        name, url = endpoints[endpoint - 1]
+        is_up = await check_url(url)
+        await ctx.reply(f"{name}: {mark(is_up)}")
+    else:
+        results = await asyncio.gather(*[check_url(url) for _, url in endpoints])
+        await ctx.reply("\n".join(f"{name}: {mark(up)}" for (name, _), up in zip(endpoints, results)))
 
 @bot.hybrid_command(name="time", description="Time left until Myrient deadline")
 async def time_cmd(ctx):
