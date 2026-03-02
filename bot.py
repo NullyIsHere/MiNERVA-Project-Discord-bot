@@ -29,7 +29,7 @@ SOURCE_URL      = "https://github.com/pixelkat5/MiNERVA-Project-Discord-bot"
 
 COMMANDS_CHANNEL_ID = 1477718885502292164
 ALLOWED_ROLES = {"Project Lead", "Manager", "LORD HOARDER", "Moderator", "Developer"}
-CACHE_TTL = 300
+CACHE_TTL = 60
 
 
 DOWN_KEYWORDS = [
