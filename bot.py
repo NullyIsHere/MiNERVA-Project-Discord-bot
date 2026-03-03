@@ -77,6 +77,7 @@ HELP_TEXT = (
     "`!sheet` - Link to the tracking spreadsheet\n"
     "`!python / !bot` - Link to the bot source\n"
     "`!source / !sourcecode` - Link to the bot GitHub repo\n"
+    "`!download` - Link to the Minerva worker download\n"
     "`!script` - Show current upload script version\n"
     "`!script notify` - Toggle DM pings for script updates\n"
     "`!remind 1h30m (message)` - Set a reminder by duration\n"
@@ -111,8 +112,10 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 # ---- HELPERS ----
 
+
 def has_keyword(content, keywords):
     return any(re.search(r'\b' + re.escape(kw) + r'\b', content) for kw in keywords)
+
 
 def bytes_to_human(b):
     for unit in ["B", "KB", "MB", "GB", "TB"]:
@@ -423,6 +426,7 @@ async def on_message(message):
             await message.reply(embed=success_embed("hello :)", title="Reply"))
         return
 
+    content = message.content.lower().strip()
     if not has_keyword(content, SITE_KEYWORDS):
         return
 
@@ -435,6 +439,8 @@ async def on_message(message):
             await message.add_reaction(SUCCESS_EMOJI if is_up else ERROR_EMOJI)
         except discord.NotFound:
             pass
+
+
 
 # ---- COMMANDS ----
 
@@ -481,9 +487,12 @@ async def time_cmd(ctx):
         await ctx.reply(embed=error_embed("The deadline has already passed.", title="Deadline"))
 
 # Link commands
-make_link_command("sheet",  SHEET_URL,  "Link to the tracking spreadsheet")
-make_link_command("source", SOURCE_URL, "Link to the bot GitHub repo")
-make_link_command("python", GIST_URL,   "Link to the bot source code (gist)")
+DOWNLOAD_URL = "https://minerva-archive.org/worker/download"
+
+make_link_command("sheet",    SHEET_URL,    "Link to the tracking spreadsheet")
+make_link_command("source",   SOURCE_URL,   "Link to the bot GitHub repo")
+make_link_command("python",   DOWNLOAD_URL, "Link to the Minerva worker script")
+make_link_command("download", DOWNLOAD_URL, "Link to the Minerva worker download")
 
 @bot.command(name="bot")
 async def bot_cmd(ctx):
@@ -590,6 +599,7 @@ async def remind(ctx, *, reminder: str):
 @app_commands.describe(args="duration and optional interval e.g. '2m 30s'")
 async def listen(ctx, *, args: str = None):
     if not await check_channel(ctx): return
+    await ctx.defer(ephemeral=True)
     if not args:
         await reply_ephemeral(ctx, embed=discord.Embed(title="Usage", description="Usage: `!listen 2m` or `!listen 2m 30s`", color=discord.Color.blue()), ephemeral=True)
         return
